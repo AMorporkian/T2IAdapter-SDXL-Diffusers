@@ -41,7 +41,9 @@ class MultiAdapter(ModelMixin):
         self.num_adapter = len(adapters)
         self.adapters = nn.ModuleList(adapters)
 
-    def forward(self, xs: torch.Tensor, adapter_weights: Optional[List[float]] = None) -> List[torch.Tensor]:
+    def forward(
+        self, xs: torch.Tensor, adapter_weights: Optional[List[float]] = None
+    ) -> List[torch.Tensor]:
         r"""
         Args:
             xs (`torch.Tensor`):
@@ -108,11 +110,17 @@ class T2IAdapter(ModelMixin, ConfigMixin):
         super().__init__()
 
         if adapter_type == "full_adapter":
-            self.adapter = FullAdapter(in_channels, channels, num_res_blocks, downscale_factor)
+            self.adapter = FullAdapterXL(
+                in_channels, channels, num_res_blocks, downscale_factor
+            )
         elif adapter_type == "light_adapter":
-            self.adapter = LightAdapter(in_channels, channels, num_res_blocks, downscale_factor)
+            self.adapter = LightAdapterXL(
+                in_channels, channels, num_res_blocks, downscale_factor
+            )
         else:
-            raise ValueError(f"unknown adapter_type: {type}. Choose either 'full_adapter' or 'simple_adapter'")
+            raise ValueError(
+                f"unknown adapter_type: {type}. Choose either 'full_adapter' or 'simple_adapter'"
+            )
 
     def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
         return self.adapter(x)
@@ -125,13 +133,14 @@ class T2IAdapter(ModelMixin, ConfigMixin):
 # full adapter
 
 
-class FullAdapter(nn.Module):
+class FullAdapterXL(nn.Module):
     def __init__(
         self,
         in_channels: int = 3,
         channels: List[int] = [320, 640, 1280],
         num_res_blocks: int = 2,
         downscale_factor: int = 8,
+        downs: List[bool] = [True, False, True],
     ):
         super().__init__()
 
@@ -139,18 +148,24 @@ class FullAdapter(nn.Module):
 
         self.unshuffle = nn.PixelUnshuffle(downscale_factor)
         self.conv_in = nn.Conv2d(in_channels, channels[0], kernel_size=3, padding=1)
-        downs = [True, False, True]
+        self.downs = downs
         self.body = nn.ModuleList(
             [
-                AdapterBlock(channels[0], channels[0], num_res_blocks, down=downs[0]),
-                
-                AdapterBlock(channels[0], channels[1], num_res_blocks, down=downs[1]),
-
-                AdapterBlock(channels[1], channels[2], num_res_blocks, down=downs[2]),
+                AdapterBlock(
+                    channels[0], channels[0], num_res_blocks, down=self.downs[0]
+                ),
+                AdapterBlock(
+                    channels[0], channels[1], num_res_blocks, down=self.downs[1]
+                ),
+                AdapterBlock(
+                    channels[1], channels[2], num_res_blocks, down=self.downs[2]
+                ),
             ]
         )
 
-        self.total_downscale_factor = downscale_factor * 2 * (len([d for d in downs if d]) + 1)
+        self.total_downscale_factor = (
+            downscale_factor * 2 * (len([d for d in self.downs if d]) + 1)
+        )
 
     def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
         x = self.unshuffle(x)
@@ -212,14 +227,14 @@ class AdapterResnetBlock(nn.Module):
 # light adapter
 
 
-class LightAdapter(nn.Module):
+class LightAdapterXL(nn.Module):
     def __init__(
         self,
         in_channels: int = 3,
         channels: List[int] = [320, 640, 1280],
         num_res_blocks: int = 2,
-        num_transformer_blocks: int = [0, 2, 10],
         downscale_factor: int = 8,
+        downs: List[bool] = [True, False, True],
     ):
         super().__init__()
 
@@ -227,15 +242,25 @@ class LightAdapter(nn.Module):
 
         self.unshuffle = nn.PixelUnshuffle(downscale_factor)
 
+        self.downs = downs
+
         self.body = nn.ModuleList(
             [
-                LightAdapterBlock(in_channels, channels[0], num_res_blocks, down=True),
-                LightAdapterBlock(channels[0], channels[1], num_res_blocks),
-                LightAdapterBlock(channels[1], channels[2], num_res_blocks, down=True),
+                LightAdapterBlock(
+                    in_channels, channels[0], num_res_blocks, down=downs[0]
+                ),
+                LightAdapterBlock(
+                    channels[0], channels[1], num_res_blocks, down=downs[1]
+                ),
+                LightAdapterBlock(
+                    channels[1], channels[2], num_res_blocks, down=downs[2]
+                ),
             ]
         )
 
-        self.total_downscale_factor = downscale_factor * (2 ** len(channels))
+        self.total_downscale_factor = (
+            downscale_factor * 2 * (len([d for d in self.downs if d]) + 1)
+        )
 
     def forward(self, x):
         x = self.unshuffle(x)
@@ -259,7 +284,9 @@ class LightAdapterBlock(nn.Module):
             self.downsample = Downsample2D(in_channels)
 
         self.in_conv = nn.Conv2d(in_channels, mid_channels, kernel_size=1)
-        self.resnets = nn.Sequential(*[LightAdapterResnetBlock(mid_channels) for _ in range(num_res_blocks)])
+        self.resnets = nn.Sequential(
+            *[LightAdapterResnetBlock(mid_channels) for _ in range(num_res_blocks)]
+        )
         self.out_conv = nn.Conv2d(mid_channels, out_channels, kernel_size=1)
 
     def forward(self, x):
